@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">    
+    <title>摩拜单车分布可视化</title>    
+    <script src="http://static.popodv.com/dvlibs/alipay/data-set.v0.9.6.min.js"></script>
+    <script src="http://static.popodv.com/dvlibs/tool/jquery.min.js"></script>   
+	<script src="https://webapi.amap.com/maps?v=1.4.12&key=264b16eb8ed48b872fd7939ec41ac2f6&plugin=AMap.Walking"></script>
+	<script src="http://webapi.amap.com/ui/1.0/main.js?v=1.0.11"></script>
+	<script src="https://a.amap.com/jsapi_demos/static/demo-center/js/demoutils.js"></script>
+	<script src="https://cache.amap.com/lbs/static/addToolbar.js"></script>
+	<link rel="stylesheet" href="https://a.amap.com/jsapi_demos/static/demo-center/css/demo-center.css" />
+    <style>
+        html,
+        body,
+        #container {
+            width: 100%;
+            height: 100%;
+        }
+        #panel {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 300px;
+        }
+        #panel .amap-call {
+            background-color: #009cf9;
+            border-top-left-radius: 4px;
+   	        border-top-right-radius: 4px;
+        }
+        #panel .amap-lib-walking {
+	        border-bottom-left-radius: 4px;
+   	        border-bottom-right-radius: 4px;
+            overflow: hidden;
+        }
+		.input-item{
+			position:relative;
+		}
+    </style>	
+</head>
+<body>
+	<!-- 依次为整个页面、导航面板、定位信息、按钮面板 -->
+	<div id="container"></div>
+	<div id="panel"></div>
+	<div class="input-card">
+		<div class="input-item">
+			<input type="button" class="btn" onclick="locate()" value="定位"/>
+		</div>
+		<div class="input-item">
+			<input type="button" class="btn" onclick="pointSimplifierIns.show()" value="显示坐标点"/>
+			<input type="button" class="btn" onclick="pointSimplifierIns.hide()" value="隐藏坐标点"/>
+		</div>
+		<div class="input-item">
+			<input type="button" class="btn" onclick="heatmap.show()" value="显示热力图"/>
+			<input type="button" class="btn" onclick="heatmap.hide()" value="隐藏热力图"/>
+		</div>
+	</div>
+
+    <script type="text/javascript">    
+	var map = new AMap.Map('container', {});
+	var heatmap;
+	var pointSimplifierIns;
+	var mylocation;
+	var distlocation;	
+	//  获取数据作为匿名函数的参数
+	$.get('https://raw.githubusercontent.com/collyzxy/g2-src/master/G2.csv', data => {		
+		// 准备单车坐标数据
+		var heatmapData = [];
+		const dv1 = new DataSet().createView().source(data, {type:'csv'});
+		dv1.transform({
+			type:'map',
+			callback(row){
+				heatmapData.push({
+					lng:row.distX,
+					lat:row.distY
+				});
+				return row;
+			}
+		});
+		// 绘制热力图
+		map.plugin("AMap.Heatmap", function(){
+			heatmap = new AMap.Heatmap(map, {});
+			heatmap.setDataSet({
+				data: heatmapData,
+			});
+		});
+		// 海量点绘制需要的数据格式不同
+		var usrdata = [];
+		const dv2 = new DataSet().createView().source(data, {type:'csv'});
+		dv2.transform({
+			type:'map',
+			callback(row){
+				usrdata.push({position:[row.distX, row.distY]});
+				return row;
+			}
+		});
+		//加载PointSimplifier组件
+		AMapUI.loadUI(['misc/PointSimplifier'], function(PointSimplifier) {
+			if (!PointSimplifier.supportCanvas) {
+				alert('当前环境不支持 Canvas！');
+				return;
+			}
+			pointSimplifierIns = new PointSimplifier({
+				map: map, //关联的map
+				compareDataItem: function(a, b, aIndex, bIndex) {
+					//数据源中靠后的元素优先，index大的排到前面去
+					return aIndex > bIndex ? -1 : 1;
+				},
+				getPosition: function(dataItem) {
+					//返回数据项的经纬度，AMap.LngLat实例或者经纬度数组
+					return dataItem.position;
+				},
+				getHoverTitle: function(dataItem, idx) {
+					//返回数据项的Title信息，鼠标hover时显示
+					return '坐标: ' + dataItem.position[0]+','+dataItem.position[1];
+				},
+				renderOptions: {
+					//点的样式
+					pointStyle: {
+						content: PointSimplifier.Render.Canvas.getImageContent(
+							'https://raw.githubusercontent.com/collyzxy/g2-src/master/bike.bmp',
+							function onload() {
+								pointSimplifierIns.renderLater();
+							},
+							function onerror(e) {
+								alert('图片加载失败！');
+							}),
+						width: 25,
+						height: 25
+					}
+				}
+			});
+			pointSimplifierIns.setData(usrdata);	
+			pointSimplifierIns.on('pointClick', function(e, record) {
+				var tmp1 = record.data.position;
+				distlocation = new AMap.LngLat(tmp1[0], tmp1[1]);
+				route();
+			});
+		});
+	});
+	function locate(){
+		AMap.plugin('AMap.Geolocation', function() {
+			var geolocation = new AMap.Geolocation({
+				zoomToAccuracy: true
+			});
+			map.addControl(geolocation);
+			geolocation.getCurrentPosition(function(status, result){
+				if(status === 'complete')
+					mylocation = result.position;
+				else
+					log.error(result.message);
+			});
+		});
+	}
+	function route(){
+		var MWalk = new AMap.Walking({
+			map:map,
+			panel:"panel"
+		}); 
+		MWalk.search(mylocation, distlocation, function(status, result) {
+			if (status === 'complete')
+				log.success('绘制步行路线完成');
+			else
+				log.error('步行路线数据查询失败' + result);
+		});
+	}
+    </script>
+</body>
+</html>
